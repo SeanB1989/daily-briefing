@@ -7,32 +7,13 @@ client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 MODEL = "claude-opus-4-5"
 
 
-def generate_brief(emails: list, events: list, upcoming: list, inbox_items: list) -> dict:
-    """
-    Given today's emails, calendar events, and dump inbox items,
-    generate a morning brief and propose up to 3 priorities.
-
-    Returns:
-        {
-            "summary": str,          # 2-3 sentence overview of the day
-            "email_highlights": [...], # key emails worth actioning
-            "priorities": [          # up to 3 proposed priorities
-                {
-                    "title": str,
-                    "reasoning": str,
-                    "source": str,   # "email" | "calendar" | "inbox" | "manual"
-                    "suggested_time": str  # e.g. "morning" | "afternoon" | "anytime"
-                }
-            ],
-            "watchlist": [...],      # things to keep an eye on but not act on today
-            "fyi": str               # short note about the next few days
-        }
-    """
-
+def generate_brief(emails: list, events: list, upcoming: list, inbox_items: list, recruiter_emails: list = None, linkedin_jobs: list = None) -> dict:
     today_events_text = _fmt_events(events)
     upcoming_text = _fmt_upcoming(upcoming)
     emails_text = _fmt_emails(emails)
     inbox_text = _fmt_inbox(inbox_items)
+    recruiter_text = _fmt_recruiter_emails(recruiter_emails or [])
+    jobs_text = _fmt_jobs(linkedin_jobs or [])
 
     prompt = f"""You are a sharp, concise chief of staff. Your job is to brief your boss each morning so they know exactly what matters today and can focus without overwhelm.
 
@@ -50,6 +31,12 @@ Here is everything you know about their day:
 === THEIR PERSONAL INBOX (things they've dumped in to deal with) ===
 {inbox_text or "Nothing in the inbox."}
 
+=== RECRUITER EMAILS (last 7 days) ===
+{recruiter_text or "No recruiter emails found."}
+
+=== NEW PMM JOBS ON LINKEDIN (last 24h) ===
+{jobs_text or "No new listings found."}
+
 ---
 
 Your job:
@@ -58,6 +45,7 @@ Your job:
 3. Propose exactly 3 priorities for the day. Each priority should have a clear title, a one-sentence reason why it matters TODAY (not just generally), and a rough time suggestion. Be opinionated — don't hedge.
 4. Identify anything on the watchlist (things to keep an eye on, not act on yet).
 5. Write a one-sentence heads-up about the next few days.
+6. Summarise the top job opportunities — recruiter emails worth replying to, and LinkedIn listings that look promising. Be selective, not exhaustive.
 
 Respond in this exact JSON format:
 {{
@@ -69,20 +57,22 @@ Respond in this exact JSON format:
     {{"title": "...", "reasoning": "...", "source": "email|calendar|inbox|manual", "suggested_time": "morning|afternoon|anytime"}}
   ],
   "watchlist": ["...", "..."],
-  "fyi": "..."
+  "fyi": "...",
+  "job_opportunities": [
+    {{"type": "recruiter|linkedin", "title": "...", "company": "...", "note": "...", "url": ""}}
+  ]
 }}
 
 Keep everything tight. Your boss doesn't have time for waffle."""
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1500,
+        max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
 
     raw = response.content[0].text.strip()
 
-    # Strip markdown code fences if present
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -92,13 +82,13 @@ Keep everything tight. Your boss doesn't have time for waffle."""
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # Fallback: return the raw text wrapped in a basic structure
         return {
             "summary": raw[:500],
             "email_highlights": [],
             "priorities": [],
             "watchlist": [],
-            "fyi": ""
+            "fyi": "",
+            "job_opportunities": []
         }
 
 
@@ -198,3 +188,26 @@ def _fmt_inbox(items: list) -> str:
     if not items:
         return ""
     return "\n".join(f"- {item['content']}" for item in items)
+
+
+def _fmt_recruiter_emails(emails: list) -> str:
+    if not emails:
+        return ""
+    lines = []
+    for e in emails:
+        lines.append(f"- From {e['from']} | {e['subject']}\n  {e['snippet']}")
+    return "\n".join(lines)
+
+
+def _fmt_jobs(jobs: list) -> str:
+    if not jobs:
+        return ""
+    lines = []
+    for j in jobs:
+        line = f"- {j['title']} at {j['company']}"
+        if j.get("location"):
+            line += f" ({j['location']})"
+        if j.get("url"):
+            line += f" — {j['url']}"
+        lines.append(line)
+    return "\n".join(lines)

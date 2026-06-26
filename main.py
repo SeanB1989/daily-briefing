@@ -16,6 +16,7 @@ from database import (
 from services.gmail_service import get_important_emails
 from services.calendar_service import get_todays_events, get_upcoming_events
 from services.ai_service import generate_brief, triage_items
+from services.jobs_service import get_linkedin_jobs, get_recruiter_emails
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -182,8 +183,10 @@ def api_generate_brief():
         events = get_todays_events(creds)
         upcoming = get_upcoming_events(creds)
         inbox_items = get_inbox_items()
+        recruiter_emails = get_recruiter_emails(creds)
+        linkedin_jobs = get_linkedin_jobs()
 
-        brief_data = generate_brief(emails, events, upcoming, inbox_items)
+        brief_data = generate_brief(emails, events, upcoming, inbox_items, recruiter_emails, linkedin_jobs)
 
         # Save to DB
         date = today_str()

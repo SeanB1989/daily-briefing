@@ -1,0 +1,282 @@
+Here are the three files to update. Do them one at a time.
+
+FILE 1: Create services/jobs_service.py (new file)
+In Replit, click the Files panel, hit +, type services/jobs_service.py, paste this in:
+pythonimport re
+import requests
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+
+
+# ── LinkedIn public job scraper ───────────────────────────────────────────────
+
+LINKEDIN_SEARCH_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+SEARCH_PARAMS = {
+    "keywords": "Product Marketing Manager",
+    "location": "",          # blank = worldwide
+    "f_WT": "2,3",           # 2=remote, 3=hybrid
+    "f_TPR": "r86400",       # posted in last 24 hours
+    "start": 0,
+    "count": 10,
+}
+
+
+def get_linkedin_jobs() -> list[dict]:
+    """Scrape LinkedIn public job search for PMM roles (no login needed)."""
+    try:
+        resp = requests.get(
+            LINKEDIN_SEARCH_URL,
+            params=SEARCH_PARAMS,
+            headers=HEADERS,
+            timeout=10
+        )
+        if resp.status_code != 200:
+            return []
+
+        html = resp.text
+        jobs = []
+
+        # Parse job cards from the HTML
+        # LinkedIn guest API returns HTML fragments
+        titles = re.findall(r'class="base-search-card__title"[^>]*>\s*(.*?)\s*</h3>', html, re.DOTALL)
+        companies = re.findall(r'class="base-search-card__subtitle"[^>]*>.*?<a[^>]*>(.*?)</a>', html, re.DOTALL)
+        locations = re.findall(r'class="job-search-card__location"[^>]*>\s*(.*?)\s*</span>', html, re.DOTALL)
+        links = re.findall(r'href="(https://www\.linkedin\.com/jobs/view/[^"?]+)', html)
+
+        for i in range(min(len(titles), len(companies), 8)):
+            jobs.append({
+                "title": _clean(titles[i]),
+                "company": _clean(companies[i]) if i < len(companies) else "Unknown",
+                "location": _clean(locations[i]) if i < len(locations) else "",
+                "url": links[i] if i < len(links) else "",
+            })
+
+        return jobs
+
+    except Exception:
+        return []
+
+
+# ── Recruiter email filter ────────────────────────────────────────────────────
+
+RECRUITER_KEYWORDS = [
+    "opportunity", "role", "position", "hiring", "job",
+    "recruiter", "talent", "opening", "candidate", "interview",
+    "your background", "your profile", "reached out", "exciting role",
+]
+
+RECRUITER_SENDER_PATTERNS = [
+    "recruit", "talent", "hiring", "hr@", "people@", "careers@",
+    "headhunt", "staffing", "linkedin"
+]
+
+
+def get_recruiter_emails(creds: Credentials, max_results: int = 20) -> list[dict]:
+    """Pull emails that look like recruiter outreach from Gmail."""
+    try:
+        service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+        # Search for recruiter-style emails from the last 7 days
+        query = (
+            "in:inbox newer_than:7d ("
+            "subject:opportunity OR subject:role OR subject:position OR "
+            "subject:hiring OR subject:\"job opportunity\" OR "
+            "subject:\"exciting opportunity\" OR subject:recruiter"
+            ")"
+        )
+
+        result = service.users().messages().list(
+            userId="me",
+            q=query,
+            maxResults=max_results
+        ).execute()
+
+        messages = result.get("messages", [])
+        emails = []
+
+        for msg in messages:
+            try:
+                full = service.users().messages().get(
+                    userId="me",
+                    id=msg["id"],
+                    format="metadata",
+                    metadataHeaders=["From", "Subject", "Date"]
+                ).execute()
+
+                headers = {h["name"]: h["value"] for h in full["payload"]["headers"]}
+                snippet = full.get("snippet", "")
+                sender = headers.get("From", "").lower()
+                subject = headers.get("Subject", "")
+
+                # Extra filter: sender or snippet should smell like a recruiter
+                is_recruiter = (
+                    any(p in sender for p in RECRUITER_SENDER_PATTERNS) or
+                    any(k in snippet.lower() for k in RECRUITER_KEYWORDS) or
+                    any(k in subject.lower() for k in RECRUITER_KEYWORDS)
+                )
+
+                if is_recruiter:
+                    emails.append({
+                        "from": _clean_sender(headers.get("From", "Unknown")),
+                        "subject": subject,
+                        "snippet": snippet[:200],
+                    })
+            except Exception:
+                continue
+
+        return emails
+
+    except Exception:
+        return []
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _clean(text: str) -> str:
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _clean_sender(raw: str) -> str:
+    match = re.match(r'^"?([^"<]+)"?\s*<', raw)
+    if match:
+        return match.group(1).strip()
+    return raw.strip()
+
+FILE 2: Update services/ai_service.py
+Replace the generate_brief function signature and prompt. Find this line:
+pythondef generate_brief(emails: list, events: list, upcoming: list, inbox_items: list) -> dict:
+Replace the whole function (lines 10–102) with this:
+pythondef generate_brief(emails: list, events: list, upcoming: list, inbox_items: list, recruiter_emails: list = None, linkedin_jobs: list = None) -> dict:
+    today_events_text = _fmt_events(events)
+    upcoming_text = _fmt_upcoming(upcoming)
+    emails_text = _fmt_emails(emails)
+    inbox_text = _fmt_inbox(inbox_items)
+    recruiter_text = _fmt_recruiter_emails(recruiter_emails or [])
+    jobs_text = _fmt_jobs(linkedin_jobs or [])
+
+    prompt = f"""You are a sharp, concise chief of staff. Your job is to brief your boss each morning so they know exactly what matters today and can focus without overwhelm.
+
+Here is everything you know about their day:
+
+=== TODAY'S CALENDAR ===
+{today_events_text or "Nothing scheduled today."}
+
+=== COMING UP (next 3 days) ===
+{upcoming_text or "Nothing significant coming up."}
+
+=== UNREAD EMAILS (most recent first) ===
+{emails_text or "Inbox clear."}
+
+=== THEIR PERSONAL INBOX (things they've dumped in to deal with) ===
+{inbox_text or "Nothing in the inbox."}
+
+=== RECRUITER EMAILS (last 7 days) ===
+{recruiter_text or "No recruiter emails found."}
+
+=== NEW PMM JOBS ON LINKEDIN (last 24h) ===
+{jobs_text or "No new listings found."}
+
+---
+
+Your job:
+1. Write a SHORT (2-3 sentence) plain-English summary of the day. Be direct. No fluff.
+2. Pick up to 3 emails that genuinely need action today (ignore newsletters, automated stuff, FYIs).
+3. Propose exactly 3 priorities for the day. Each priority should have a clear title, a one-sentence reason why it matters TODAY (not just generally), and a rough time suggestion. Be opinionated — don't hedge.
+4. Identify anything on the watchlist (things to keep an eye on, not act on yet).
+5. Write a one-sentence heads-up about the next few days.
+6. Summarise the top job opportunities — recruiter emails worth replying to, and LinkedIn listings that look promising. Be selective, not exhaustive.
+
+Respond in this exact JSON format:
+{{
+  "summary": "...",
+  "email_highlights": [
+    {{"from": "...", "subject": "...", "action": "..."}}
+  ],
+  "priorities": [
+    {{"title": "...", "reasoning": "...", "source": "email|calendar|inbox|manual", "suggested_time": "morning|afternoon|anytime"}}
+  ],
+  "watchlist": ["...", "..."],
+  "fyi": "...",
+  "job_opportunities": [
+    {{"type": "recruiter|linkedin", "title": "...", "company": "...", "note": "...", "url": ""}}
+  ]
+}}
+
+Keep everything tight. Your boss doesn't have time for waffle."""
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    raw = response.content[0].text.strip()
+
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {
+            "summary": raw[:500],
+            "email_highlights": [],
+            "priorities": [],
+            "watchlist": [],
+            "fyi": "",
+            "job_opportunities": []
+        }
+Then at the bottom of the file, add these two new formatting helpers before the final line:
+pythondef _fmt_recruiter_emails(emails: list) -> str:
+    if not emails:
+        return ""
+    lines = []
+    for e in emails:
+        lines.append(f"- From {e['from']} | {e['subject']}\n  {e['snippet']}")
+    return "\n".join(lines)
+
+
+def _fmt_jobs(jobs: list) -> str:
+    if not jobs:
+        return ""
+    lines = []
+    for j in jobs:
+        line = f"- {j['title']} at {j['company']}"
+        if j.get("location"):
+            line += f" ({j['location']})"
+        if j.get("url"):
+            line += f" — {j['url']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+FILE 3: Update main.py
+At the top where imports are, add this line after the other service imports:
+pythonfrom services.jobs_service import get_linkedin_jobs, get_recruiter_emails
+Then in the api_generate_brief function, find these lines:
+python        emails = get_important_emails(creds)
+        events = get_todays_events(creds)
+        upcoming = get_upcoming_events(creds)
+        inbox_items = get_inbox_items()
+
+        brief_data = generate_brief(emails, events, upcoming, inbox_items)
+Replace them with:
+python        emails = get_important_emails(creds)
+        events = get_todays_events(creds)
+        upcoming = get_upcoming_events(creds)
+        inbox_items = get_inbox_items()
+        recruiter_emails = get_recruiter_emails(creds)
+        linkedin_jobs = get_linkedin_jobs()
+
+        brief_data = generate_brief(emails, events, upcoming, inbox_items, recruiter_emails, linkedin_jobs)
