@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block title %}Morning Brief{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex items-center justify-between">
+  <div>
+    <h1 class="text-xl font-semibold text-white">Morning Brief</h1>
+    <p class="text-muted text-sm mt-1">{{ date_display }}</p>
+  </div>
+  <button
+    id="generate-btn"
+    onclick="generateBrief()"
+    class="bg-accent hover:bg-accentHover text-white text-sm px-4 py-2 rounded transition flex items-center gap-2"
+  >
+    <span id="generate-label">{% if brief.brief_text %}Regenerate{% else %}Generate my brief{% endif %}</span>
+    <span id="generate-spinner" class="spinner hidden"></span>
+  </button>
+</div>
+
+<!-- Empty state -->
+{% if not brief.brief_text %}
+<div id="empty-state" class="text-center py-20 text-muted">
+  <p class="text-lg mb-2">No brief yet for today.</p>
+  <p class="text-sm">Hit "Generate my brief" to pull in your emails, calendar, and inbox.</p>
+</div>
+{% endif %}
+
+<!-- Brief content (shown after generation or if already exists) -->
+<div id="brief-content" class="space-y-6 {% if not brief.brief_text %}hidden{% endif %}">
+
+  <!-- Summary -->
+  <div class="bg-card border border-border rounded-lg p-5">
+    <p class="text-xs text-muted uppercase tracking-wider mb-2">Overview</p>
+    <p id="summary-text" class="text-white leading-relaxed">{{ brief.brief_text or "" }}</p>
+  </div>
+
+  <!-- Priorities -->
+  <div>
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-medium text-white uppercase tracking-wider">Today's Top 3</h2>
+      {% if confirmed %}
+        <span class="text-xs text-green-400">✓ Confirmed</span>
+      {% endif %}
+    </div>
+
+    <div id="priorities-list" class="space-y-3">
+      {% set priorities_to_show = confirmed if confirmed else proposed %}
+      {% for p in priorities_to_show %}
+      <div class="bg-card border border-border rounded-lg p-4 flex gap-4 items-start priority-card" data-index="{{ loop.index0 }}">
+        <div class="text-2xl font-bold text-accent mt-0.5 w-6 shrink-0">{{ loop.index }}</div>
+        <div class="flex-1 min-w-0">
+          <p class="text-white font-medium priority-title">{{ p.title }}</p>
+          <p class="text-muted text-sm mt-1 priority-reasoning">{{ p.reasoning }}</p>
+          <div class="flex gap-2 mt-2">
+            <span class="text-xs bg-surface border border-border text-muted px-2 py-0.5 rounded">{{ p.source }}</span>
+            <span class="text-xs bg-surface border border-border text-muted px-2 py-0.5 rounded">{{ p.suggested_time }}</span>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if proposed and not confirmed %}
+    <div class="mt-4 flex gap-3">
+      <button onclick="confirmPriorities()" class="bg-accent hover:bg-accentHover text-white text-sm px-4 py-2 rounded transition">
+        Confirm these priorities
+      </button>
+      <button onclick="editPriorities()" class="border border-border text-muted hover:text-white text-sm px-4 py-2 rounded transition">
+        Edit first
+      </button>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Email highlights -->
+  <div>
+    <h2 class="text-sm font-medium text-white uppercase tracking-wider mb-3">Emails needing action</h2>
+    <div id="email-highlights" class="space-y-2">
+      <!-- populated by JS -->
+    </div>
+  </div>
+
+  <!-- Watchlist -->
+  <div>
+    <h2 class="text-sm font-medium text-white uppercase tracking-wider mb-3">Keep an eye on</h2>
+    <ul id="watchlist" class="space-y-1 text-muted text-sm list-disc list-inside">
+      <!-- populated by JS -->
+    </ul>
+  </div>
+
+  <!-- FYI -->
+  <div class="bg-card border border-border rounded-lg px-5 py-4">
+    <p class="text-xs text-muted uppercase tracking-wider mb-1">Next few days</p>
+    <p id="fyi-text" class="text-sm text-gray-300"></p>
+  </div>
+
+</div>
+
+<!-- Edit modal (simple inline) -->
+<div id="edit-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
+  <div class="bg-card border border-border rounded-lg p-6 w-full max-w-lg space-y-4">
+    <h3 class="text-white font-medium">Edit your priorities</h3>
+    <div id="edit-fields" class="space-y-3"></div>
+    <div class="flex gap-3">
+      <button onclick="saveEdits()" class="bg-accent hover:bg-accentHover text-white text-sm px-4 py-2 rounded transition">Save &amp; confirm</button>
+      <button onclick="closeEdit()" class="border border-border text-muted hover:text-white text-sm px-4 py-2 rounded transition">Cancel</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let currentBriefData = null;
+  let currentPriorities = {{ (confirmed or proposed) | tojson }};
+
+  async function generateBrief() {
+    const btn = document.getElementById("generate-btn");
+    const label = document.getElementById("generate-label");
+    const spinner = document.getElementById("generate-spinner");
+    label.textContent = "Generating...";
+    spinner.classList.remove("hidden");
+    btn.disabled = true;
+
+    try {
+      const res = await fetch("/api/generate-brief", { method: "POST" });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      currentBriefData = data;
+      currentPriorities = data.priorities || [];
+      renderBrief(data);
+    } catch (e) {
+      showToast("Failed to generate brief: " + e.message, true);
+    } finally {
+      label.textContent = "Regenerate";
+      spinner.classList.add("hidden");
+      btn.disabled = false;
+    }
+  }
+
+  function renderBrief(data) {
+    document.getElementById("empty-state")?.classList.add("hidden");
+    document.getElementById("brief-content").classList.remove("hidden");
+
+    document.getElementById("summary-text").textContent = data.summary || "";
+    document.getElementById("fyi-text").textContent = data.fyi || "";
+
+    // Priorities
+    renderPriorities(data.priorities || []);
+
+    // Email highlights
+    const emailEl = document.getElementById("email-highlights");
+    emailEl.innerHTML = "";
+    (data.email_highlights || []).forEach(e => {
+      emailEl.innerHTML += `
+        <div class="bg-card border border-border rounded p-3">
+          <p class="text-white text-sm font-medium">${escHtml(e.subject)}</p>
+          <p class="text-muted text-xs mt-0.5">From ${escHtml(e.from)} — <span class="text-gray-300">${escHtml(e.action)}</span></p>
+        </div>`;
+    });
+
+    // Watchlist
+    const wlEl = document.getElementById("watchlist");
+    wlEl.innerHTML = "";
+    (data.watchlist || []).forEach(w => {
+      wlEl.innerHTML += `<li>${escHtml(w)}</li>`;
+    });
+  }
+
+  function renderPriorities(priorities) {
+    const list = document.getElementById("priorities-list");
+    list.innerHTML = "";
+    priorities.forEach((p, i) => {
+      list.innerHTML += `
+        <div class="bg-card border border-border rounded-lg p-4 flex gap-4 items-start">
+          <div class="text-2xl font-bold text-accent mt-0.5 w-6 shrink-0">${i + 1}</div>
+          <div class="flex-1 min-w-0">
+            <p class="text-white font-medium">${escHtml(p.title)}</p>
+            <p class="text-muted text-sm mt-1">${escHtml(p.reasoning)}</p>
+            <div class="flex gap-2 mt-2">
+              <span class="text-xs bg-surface border border-border text-muted px-2 py-0.5 rounded">${escHtml(p.source || "")}</span>
+              <span class="text-xs bg-surface border border-border text-muted px-2 py-0.5 rounded">${escHtml(p.suggested_time || "")}</span>
+            </div>
+          </div>
+        </div>`;
+    });
+  }
+
+  async function confirmPriorities() {
+    const res = await fetch("/api/confirm-priorities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ priorities: currentPriorities }),
+    });
+    if (res.ok) showToast("Priorities locked in ✓");
+  }
+
+  function editPriorities() {
+    const fields = document.getElementById("edit-fields");
+    fields.innerHTML = "";
+    currentPriorities.forEach((p, i) => {
+      fields.innerHTML += `
+        <div class="space-y-1">
+          <label class="text-muted text-xs">#${i + 1}</label>
+          <input
+            class="w-full bg-surface border border-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-accent"
+            value="${escHtml(p.title)}"
+            data-index="${i}"
+            data-field="title"
+          />
+        </div>`;
+    });
+    document.getElementById("edit-modal").classList.remove("hidden");
+  }
+
+  function closeEdit() {
+    document.getElementById("edit-modal").classList.add("hidden");
+  }
+
+  async function saveEdits() {
+    const inputs = document.querySelectorAll("#edit-fields input");
+    inputs.forEach(input => {
+      const idx = parseInt(input.dataset.index);
+      currentPriorities[idx].title = input.value;
+    });
+    renderPriorities(currentPriorities);
+    closeEdit();
+    await confirmPriorities();
+  }
+
+  function escHtml(str) {
+    if (!str) return "";
+    return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+</script>
+{% endblock %}

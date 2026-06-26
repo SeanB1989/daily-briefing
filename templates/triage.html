@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Triage{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex items-center justify-between">
+  <div>
+    <h1 class="text-xl font-semibold text-white">Triage</h1>
+    <p class="text-muted text-sm mt-1">{{ inbox_count }} item{{ 's' if inbox_count != 1 else '' }} to process</p>
+  </div>
+  {% if items %}
+  <button
+    id="ai-btn"
+    onclick="loadAISuggestions()"
+    class="bg-accent hover:bg-accentHover text-white text-sm px-4 py-2 rounded transition flex items-center gap-2"
+  >
+    <span id="ai-label">Get AI suggestions</span>
+    <span id="ai-spinner" class="spinner hidden"></span>
+  </button>
+  {% endif %}
+</div>
+
+{% if not items %}
+  <div class="text-center py-20 text-muted">
+    <p class="text-lg mb-2">Nothing to triage.</p>
+    <p class="text-sm">Head to <a href="/dump" class="text-accent hover:underline">Dump</a> to capture some things first.</p>
+  </div>
+{% else %}
+  <div id="triage-list" class="space-y-3">
+    {% for item in items %}
+    <div
+      class="bg-card border border-border rounded-lg p-4 transition"
+      id="item-{{ item.id }}"
+      data-id="{{ item.id }}"
+    >
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex-1">
+          <p class="text-white text-sm">{{ item.content }}</p>
+          <div id="ai-info-{{ item.id }}" class="mt-2 hidden">
+            <span class="text-xs bg-surface border border-border text-muted px-2 py-0.5 rounded" id="cat-{{ item.id }}"></span>
+            <p class="text-muted text-xs mt-1 italic" id="reasoning-{{ item.id }}"></p>
+          </div>
+        </div>
+        <div class="text-xs text-muted shrink-0">{{ item.created_at[:10] }}</div>
+      </div>
+
+      <!-- Decision buttons -->
+      <div class="flex gap-2 mt-3 flex-wrap">
+        <button onclick="decide({{ item.id }}, 'do_now')"    class="decision-btn bg-green-900/40 hover:bg-green-800/60 border border-green-800 text-green-300 text-xs px-3 py-1.5 rounded transition">Do it now</button>
+        <button onclick="decide({{ item.id }}, 'schedule')"  class="decision-btn bg-blue-900/40  hover:bg-blue-800/60  border border-blue-800  text-blue-300  text-xs px-3 py-1.5 rounded transition">Schedule</button>
+        <button onclick="decide({{ item.id }}, 'someday')"   class="decision-btn bg-yellow-900/40 hover:bg-yellow-800/60 border border-yellow-800 text-yellow-300 text-xs px-3 py-1.5 rounded transition">Someday</button>
+        <button onclick="decide({{ item.id }}, 'delegate')"  class="decision-btn bg-purple-900/40 hover:bg-purple-800/60 border border-purple-800 text-purple-300 text-xs px-3 py-1.5 rounded transition">Delegate</button>
+        <button onclick="decide({{ item.id }}, 'delete')"    class="decision-btn bg-red-900/40    hover:bg-red-800/60    border border-red-800    text-red-300    text-xs px-3 py-1.5 rounded transition">Delete</button>
+      </div>
+
+      <!-- AI suggestion banner (shown after AI loads) -->
+      <div id="suggestion-{{ item.id }}" class="hidden mt-3 text-xs text-muted border-t border-border pt-2">
+        AI suggests: <span class="text-white font-medium" id="sugg-label-{{ item.id }}"></span>
+        <button onclick="acceptSuggestion({{ item.id }})" class="ml-2 text-accent hover:underline">Accept</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let suggestionMap = {};
+
+  async function loadAISuggestions() {
+    const btn = document.getElementById("ai-btn");
+    const label = document.getElementById("ai-label");
+    const spinner = document.getElementById("ai-spinner");
+    label.textContent = "Thinking...";
+    spinner.classList.remove("hidden");
+    btn.disabled = true;
+
+    try {
+      const res = await fetch("/api/triage-ai", { method: "POST" });
+      const data = await res.json();
+      (data.items || []).forEach(item => {
+        suggestionMap[item.id] = item;
+        showAISuggestion(item);
+      });
+      label.textContent = "Suggestions loaded";
+    } catch (e) {
+      showToast("Couldn't load suggestions: " + e.message, true);
+      label.textContent = "Get AI suggestions";
+    } finally {
+      spinner.classList.add("hidden");
+      btn.disabled = false;
+    }
+  }
+
+  function showAISuggestion(item) {
+    const catEl = document.getElementById(`cat-${item.id}`);
+    const reasonEl = document.getElementById(`reasoning-${item.id}`);
+    const aiInfo = document.getElementById(`ai-info-${item.id}`);
+    const suggEl = document.getElementById(`suggestion-${item.id}`);
+    const suggLabel = document.getElementById(`sugg-label-${item.id}`);
+
+    if (catEl) catEl.textContent = item.category || "";
+    if (reasonEl) reasonEl.textContent = item.ai_reasoning || "";
+    if (aiInfo) aiInfo.classList.remove("hidden");
+
+    const labelMap = {
+      do_now: "Do it now",
+      schedule: "Schedule it",
+      someday: "Someday",
+      delegate: "Delegate",
+      delete: "Delete",
+    };
+    if (suggLabel) suggLabel.textContent = labelMap[item.ai_suggestion] || item.ai_suggestion;
+    if (suggEl) suggEl.classList.remove("hidden");
+  }
+
+  function acceptSuggestion(id) {
+    const item = suggestionMap[id];
+    if (item && item.ai_suggestion) {
+      decide(id, item.ai_suggestion);
+    }
+  }
+
+  async function decide(id, decision) {
+    const el = document.getElementById(`item-${id}`);
+    const res = await fetch("/api/triage-item", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, decision }),
+    });
+
+    if (res.ok) {
+      el.style.opacity = "0";
+      el.style.transition = "opacity 0.3s";
+      setTimeout(() => {
+        el.remove();
+        updateCount();
+      }, 300);
+    } else {
+      showToast("Something went wrong", true);
+    }
+  }
+
+  function updateCount() {
+    const remaining = document.querySelectorAll("[id^='item-']").length;
+    document.querySelector("p.text-muted.text-sm.mt-1").textContent =
+      `${remaining} item${remaining !== 1 ? "s" : ""} to process`;
+    if (remaining === 0) {
+      document.getElementById("triage-list").innerHTML =
+        `<p class="text-center text-muted py-10">All done. Inbox clear.</p>`;
+    }
+  }
+</script>
+{% endblock %}

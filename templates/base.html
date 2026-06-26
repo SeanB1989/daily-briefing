@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Chief of Staff{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: "#111214",
+            card: "#1a1c1f",
+            border: "#2a2d31",
+            accent: "#6366f1",
+            accentHover: "#4f52d4",
+            muted: "#6b7280",
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #111214; color: #e5e7eb; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .flash-success { background: #14532d; border-left: 3px solid #22c55e; }
+    .flash-error   { background: #450a0a; border-left: 3px solid #ef4444; }
+    .spinner { border: 2px solid #2a2d31; border-top-color: #6366f1; border-radius: 50%; width: 18px; height: 18px; animation: spin 0.7s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="h-full">
+
+  <!-- Nav -->
+  <nav class="border-b border-border px-6 py-4 flex items-center justify-between">
+    <span class="text-white font-semibold tracking-tight text-lg">Chief of Staff</span>
+    <div class="flex items-center gap-6 text-sm">
+      <a href="/brief"  class="text-muted hover:text-white transition {% if request.path == '/brief'  %}!text-white font-medium{% endif %}">Brief</a>
+      <a href="/dump"   class="text-muted hover:text-white transition {% if request.path == '/dump'   %}!text-white font-medium{% endif %}">Dump</a>
+      <a href="/triage" class="text-muted hover:text-white transition {% if request.path == '/triage' %}!text-white font-medium{% endif %}">Triage</a>
+      <a href="/logout" class="text-muted hover:text-white transition">Sign out</a>
+    </div>
+  </nav>
+
+  <!-- Flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="px-6 pt-4 space-y-2">
+        {% for category, message in messages %}
+          <div class="flash-{{ category }} px-4 py-3 rounded text-sm text-white">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <!-- Quick dump bar — always visible -->
+  <div class="border-b border-border px-6 py-3 flex gap-3">
+    <input
+      id="quick-dump-input"
+      type="text"
+      placeholder="Quick dump — press Enter to capture..."
+      class="flex-1 bg-card border border-border rounded px-3 py-2 text-sm text-white placeholder-muted focus:outline-none focus:border-accent"
+    />
+    <button
+      onclick="quickDump()"
+      class="bg-accent hover:bg-accentHover text-white text-sm px-4 py-2 rounded transition"
+    >Dump it</button>
+  </div>
+
+  <!-- Main content -->
+  <main class="px-6 py-8 max-w-3xl mx-auto">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    async function quickDump() {
+      const input = document.getElementById("quick-dump-input");
+      const content = input.value.trim();
+      if (!content) return;
+
+      const res = await fetch("/api/dump-quick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+
+      if (res.ok) {
+        input.value = "";
+        showToast("Captured ✓");
+      } else {
+        showToast("Something went wrong", true);
+      }
+    }
+
+    document.getElementById("quick-dump-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") quickDump();
+    });
+
+    function showToast(msg, error = false) {
+      const t = document.createElement("div");
+      t.textContent = msg;
+      t.className = `fixed bottom-6 right-6 px-4 py-3 rounded text-sm text-white shadow-lg transition-opacity ${error ? "bg-red-800" : "bg-green-800"}`;
+      document.body.appendChild(t);
+      setTimeout(() => { t.style.opacity = "0"; setTimeout(() => t.remove(), 400); }, 2500);
+    }
+  </script>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>
