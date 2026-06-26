@@ -94,6 +94,12 @@
     <p id="fyi-text" class="text-sm text-gray-300"></p>
   </div>
 
+  <!-- Job opportunities -->
+  <div id="jobs-section" class="hidden">
+    <h2 class="text-sm font-medium text-white uppercase tracking-wider mb-3">Job Opportunities</h2>
+    <div id="jobs-list" class="space-y-2"></div>
+  </div>
+
 </div>
 
 <!-- Edit modal (simple inline) -->
@@ -166,6 +172,36 @@
     (data.watchlist || []).forEach(w => {
       wlEl.innerHTML += `<li>${escHtml(w)}</li>`;
     });
+
+    // Job opportunities
+    const jobs = data.job_opportunities || [];
+    const jobsSection = document.getElementById("jobs-section");
+    const jobsList = document.getElementById("jobs-list");
+    jobsList.innerHTML = "";
+    if (jobs.length > 0) {
+      jobsSection.classList.remove("hidden");
+      jobs.forEach(j => {
+        const badge = j.type === "recruiter"
+          ? `<span class="text-xs bg-purple-900/50 border border-purple-700 text-purple-300 px-2 py-0.5 rounded">Recruiter</span>`
+          : `<span class="text-xs bg-blue-900/50 border border-blue-700 text-blue-300 px-2 py-0.5 rounded">LinkedIn</span>`;
+        const link = j.url
+          ? `<a href="${escHtml(j.url)}" target="_blank" class="text-accent hover:underline text-xs mt-1 inline-block">View listing →</a>`
+          : "";
+        jobsList.innerHTML += `
+          <div class="bg-card border border-border rounded-lg p-4">
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">${badge}</div>
+                <p class="text-white text-sm font-medium">${escHtml(j.title)} <span class="text-muted font-normal">at ${escHtml(j.company)}</span></p>
+                <p class="text-muted text-xs mt-1">${escHtml(j.note)}</p>
+                ${link}
+              </div>
+            </div>
+          </div>`;
+      });
+    } else {
+      jobsSection.classList.add("hidden");
+    }
   }
 
   function renderPriorities(priorities) {
